@@ -8,9 +8,10 @@
 model trafficModel
 
 global {
+	int NUM_TRAIN_AGENTS <- 10;
 
-//the size of data windows
-	int ACW_SIZE <- 2;
+	//the size of data windows
+	int ACW_SIZE <- 10;
 	bool WRITE_TO_CSV <- false;
 	float min_speed <- 1.0 #km / #h;
 	float max_speed <- 5.0 #km / #h;
@@ -54,8 +55,21 @@ global {
 		// print the size of the envelope containing the roads
 		write string("geometry size. WIDTH: ", shape.width, " HEIGHT:", shape.height);
 
+		//TODO POSSO CREARE DEGLI AGENTI DI TRAIN, con un boolean
+		// i loro valori saranno memorizzati dalle antenne senza alcun 
+
+
 		//Creation of the people agents
 		create people number: NUM_VEHICLES {
+			speed <- rnd(min_speed, max_speed);
+			//People agents are located anywhere in one of the building
+			location <- any_location_in(one_of(building));
+			myUpdateRate <- (1 among VEHICLES_SEND_MSG_FREQs at 0) #sec;
+			write string("frequency: ", myUpdateRate);
+		}
+
+		create people number: NUM_TRAIN_AGENTS {
+			isTrainAgent <- true;
 			speed <- rnd(min_speed, max_speed);
 			//People agents are located anywhere in one of the building
 			location <- any_location_in(one_of(building));
@@ -107,6 +121,11 @@ species antenna {
 	 */
 	map<people, list<AmAliveMessage>> bufferMap;
 
+	/**
+	 * The probability that a given people is inside my region
+	 */
+	map<people, float> agInsideRegionProbability;
+
 	// The color to be used to color antenna's Voronoi region
 	rgb regionColor <- rgb(rnd(100, 200), rnd(100, 200), rnd(100, 200), 0.5);
 	list<AmAliveMessage> messages_queue;
@@ -127,34 +146,65 @@ species antenna {
 
 		// loop over the agents that sent exactly ACW_SIZE information to this antenna
 		loop ag over: bf.keys {
-		//get the messages received by ag
-			list<AmAliveMessage> agMsgList <- bf[ag];
-			float agMean <- 0.0;
-			//compare to this antenna's information
-			loop series over: beliefs {
-				float seriesMean <- 0.0;
-				loop index from: 0 to: length(agMsgList) {
-				// series is a list of AmAliveMessages of size ACW_SIZE
-				// loop over the elements of [series]
-					int xdiff <- abs(series[index].x - agMsgList[index].x);
-					int ydiff <- abs(series[index].y - agMsgList[index].y);
-					float distanceDiff <- abs(series[index].distance - agMsgList[index].distance);
-					float speedDiff <- abs(series[index].speed - agMsgList[index].speed);
-					seriesMean <- seriesMean + xdiff;
-					seriesMean <- seriesMean + ydiff;
-					seriesMean <- seriesMean + distanceDiff;
-					seriesMean <- seriesMean + speedDiff;
-				}
+			if (ag.isTrainAgent = true) {
+				beliefs <+ bf[ag];
 
-				trace {
+				//remove the record which key if ag
+				bf[] >- ag;
+			} else {
+			//get the messages received by ag
+				list<AmAliveMessage> agMsgList <- bf[ag];
+				float agMean <- #max_float;
+				//compare to this antenna's information
+				loop series over: beliefs {
+					float seriesMean <- 0.0;
+					loop index from: 0 to: length(agMsgList) - 1 {
+					// series is a list of AmAliveMessages of size ACW_SIZE
+					// loop over the elements of [series]
+					//write string('series: ', length(series), '; agMsgList: ', length(agMsgList));
+						int xdiff <- abs(series[index].x - agMsgList[index].x);
+						int ydiff <- abs(series[index].y - agMsgList[index].y);
+						float distanceDiff <- abs(series[index].distance - agMsgList[index].distance);
+						float speedDiff <- abs(series[index].speed - agMsgList[index].speed);
+						seriesMean <- seriesMean + xdiff + ydiff + distanceDiff + speedDiff;
+					}
+
 					seriesMean <- seriesMean / length(agMsgList);
+					if (seriesMean <= agMean) {
+						agMean <- seriesMean;
+					}
+
 				}
 
+				// a questo punto ho lo score dell'agente rispetto alle TS di QUESTA antenna
+				// dunque chiedo agli altri agenti se per questo agente hanno uno score maggiore
+
+				// se si, allora questo agente NON è nella zona,
+				// se no, allora l'agente è nella zona. Aggiungo la serie alla mia BB
+				//list<antenna> neighbors <- agents of_species antenna;
+				list<antenna> neighbors <- agents of_species antenna where (each.agInsideRegionProbability contains ag);
+				neighbors >- self; //remove myself
+				if (length(neighbors) > 0) {
+					ask neighbors {
+						if (self.agInsideRegionProbability[ag] <= agMean) {
+						//the agent is more likely to be in neighbors region
+						//write("have region self");
+							ag.theRegion <- self;
+						} else {
+						//write("have region myself");
+							ag.theRegion <- myself;
+						}
+
+					}
+
+				} else {
+					ag.theRegion <- self;
+				}
+
+				//get the most similar sequence
+
+				//send the score to ag
 			}
-
-			//get the most similar sequence
-
-			//send the score to ag
 
 		}
 
@@ -167,9 +217,9 @@ species antenna {
 	}
 
 	reflex aggregation_function when: every(ANTENNA_MEASURE_FREQ) {
-		write 'processed msgs: ' + length(messages_queue);
+	//write 'processed msgs: ' + length(messages_queue);
 
-		/**
+	/**
 		 * 
 		 * 	AGGREGATION FUNCTION SUPPOSED TO BE HERE
 		 * 
@@ -223,6 +273,8 @@ species AmAliveMessage {
 
 //Species to represent the people using the skill moving
 species people skills: [moving] {
+	antenna theRegion <- nil;
+	bool isTrainAgent <- false;
 	float myUpdateRate;
 
 	//Target point of the agent
@@ -232,13 +284,21 @@ species people skills: [moving] {
 	//Speed of the agent
 	float speed; // <- rnd(10,50) #km/#h;    //5 #km / #h;
 	rgb color <- rnd_color(255);
+
+	init {
+		if (isTrainAgent) {
+		}
+
+	}
+
 	//Reflex to leave the building to another building
 	reflex leave when: (target = nil) and (flip(leaving_proba)) {
 		target <- any_location_in(one_of(building));
 	}
 
 	reflex everyMove {
-		write string(self, " location: ", point(location));
+	//write string(self, " train: ", isTrainAgent);
+	//write string(self, " location: ", point(location));
 		antenna closestAntenna <- antenna closest_to (self);
 		float dist <- self distance_to closestAntenna;
 		if (WRITE_TO_CSV) {
@@ -261,7 +321,7 @@ species people skills: [moving] {
 					msg.sender <- myself;
 					msg.receiver <- self;
 					msg.distance <- self distance_to myself;
-					write string("created message: ", msg.sender, "{", (msg.sender as people).myUpdateRate, "} to ", msg.receiver, " dist: " + msg.distance);
+					//write string("created message: ", msg.sender, "{", (msg.sender as people).myUpdateRate, "} to ", msg.receiver, " dist: " + msg.distance);
 					add msg to: messages_queue;
 					// Each vehicle sends an I Am Alive message to the nearest antenna
 					receivedIAmAliveMessages <- receivedIAmAliveMessages + 1;
@@ -290,8 +350,18 @@ species people skills: [moving] {
 		} }
 
 	aspect default {
-		draw circle(15) color: color;
+		if (not isTrainAgent) {
+			draw circle(15) color: color;
+		} else {
+			draw square(15) color: #black;
+		}
+
+		if (theRegion != nil) {
+			draw line([{location.x, location.y}, {theRegion.location.x, theRegion.location.y}]) width: 4 color: #black;
+		}
+
 	} }
+
 	//Species to represent the buildings
 species building {
 
