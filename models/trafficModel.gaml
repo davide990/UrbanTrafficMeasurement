@@ -8,6 +8,7 @@
 model trafficModel
 
 global {
+
 //the size of data windows
 	int ACW_SIZE <- 2;
 	bool WRITE_TO_CSV <- false;
@@ -89,7 +90,13 @@ species antenna {
 	 * to people that are situated in the local part of environment observed by this
 	 * antenna 
 	 */
-	map<people, list<AmAliveMessage>> theMap;
+
+// IS THIS A MAP FOR SURE? I THINK THAT IF THIS CONTAINS THE SERIES 
+// SENT FROM AGENTS THAT HAVE BEEN IN THIS REGION, IT IS NOT USEFUL TO
+// CONSIDER THE SENDER. THEREFORE, A LIST WOULD BE BETTER
+
+//map<people, list<AmAliveMessage>> theMap;
+	list<list<AmAliveMessage>> beliefs;
 
 	/**
 	 * While people species send messages to this antenna,
@@ -122,8 +129,28 @@ species antenna {
 		loop ag over: bf.keys {
 		//get the messages received by ag
 			list<AmAliveMessage> agMsgList <- bf[ag];
-
+			float agMean <- 0.0;
 			//compare to this antenna's information
+			loop series over: beliefs {
+				float seriesMean <- 0.0;
+				loop index from: 0 to: length(agMsgList) {
+				// series is a list of AmAliveMessages of size ACW_SIZE
+				// loop over the elements of [series]
+					int xdiff <- abs(series[index].x - agMsgList[index].x);
+					int ydiff <- abs(series[index].y - agMsgList[index].y);
+					float distanceDiff <- abs(series[index].distance - agMsgList[index].distance);
+					float speedDiff <- abs(series[index].speed - agMsgList[index].speed);
+					seriesMean <- seriesMean + xdiff;
+					seriesMean <- seriesMean + ydiff;
+					seriesMean <- seriesMean + distanceDiff;
+					seriesMean <- seriesMean + speedDiff;
+				}
+
+				trace {
+					seriesMean <- seriesMean / length(agMsgList);
+				}
+
+			}
 
 			//get the most similar sequence
 
@@ -164,9 +191,34 @@ species antenna {
  * Custom data type used by agents
  */
 species AmAliveMessage {
+/**
+	 * Sender of this message (people)
+	 */
 	agent sender;
+	/**
+	 * Receiver of this message (antenna)
+	 */
 	agent receiver;
+
+	/**
+	 * Distance from the nearest antenna
+	 */
 	float distance;
+
+	/**
+	 * x coordinate of the sender at the moment this message is sent
+	 */
+	int x;
+
+	/**
+	 * y coordinate of the sender at the moment this message is sent
+	 */
+	int y;
+
+	/**
+	 * speed of the sender at the moment this message is sent
+	 */
+	float speed;
 }
 
 //Species to represent the people using the skill moving
