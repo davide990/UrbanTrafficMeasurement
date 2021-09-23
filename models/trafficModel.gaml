@@ -8,6 +8,8 @@
 model trafficModel
 
 global {
+//the size of data windows
+	int ACW_SIZE <- 2;
 	bool WRITE_TO_CSV <- false;
 	float min_speed <- 1.0 #km / #h;
 	float max_speed <- 5.0 #km / #h;
@@ -105,6 +107,38 @@ species antenna {
 	//rgb color <- #green update: rgb(255 * (receivedIAmAliveMessages / 30), 255 * (1 - (receivedIAmAliveMessages / 30)), 0.0);
 	rgb color <- #green;
 
+	reflex checkForPeopleInMyRegion {
+	/**
+		 * The antenna checks if in the buffer map there are information that 
+		 * can be compared to those already in agent's belief base (theMap). If so,
+		 * the antenna compares the AmAliveMessages to those already in theMap, then 
+		 * sends the results of this comparison to the people instance (the key of 
+		 * the dictionary).
+		 */
+		map<people, list<AmAliveMessage>> bf <- bufferMap;
+		bf >>- bf where (length(each) = ACW_SIZE);
+
+		// loop over the agents that sent exactly ACW_SIZE information to this antenna
+		loop ag over: bf.keys {
+		//get the messages received by ag
+			list<AmAliveMessage> agMsgList <- bf[ag];
+
+			//compare to this antenna's information
+
+			//get the most similar sequence
+
+			//send the score to ag
+
+		}
+
+		// remove all the record which keys are also in bf.
+		// I do this because once the sequences compared to 
+		// those in antenna's belief base, the people agent is
+		// either inside the zone (thus, the sequence is added to
+		// bufferMap, or outside the zone (the sequence is ignored)
+		bufferMap[] >>- bf.keys;
+	}
+
 	reflex aggregation_function when: every(ANTENNA_MEASURE_FREQ) {
 		write 'processed msgs: ' + length(messages_queue);
 
@@ -179,13 +213,13 @@ species people skills: [moving] {
 					add msg to: messages_queue;
 					// Each vehicle sends an I Am Alive message to the nearest antenna
 					receivedIAmAliveMessages <- receivedIAmAliveMessages + 1;
-					trace {
-						if (bufferMap[myself] = nil) {
-							bufferMap[myself] <- [];
-						}
-						// add the message to the antenna's queue
-						bufferMap[myself] << msg;
+					//trace {
+					if (bufferMap[myself] = nil) {
+						bufferMap[myself] <- [];
 					}
+					// add the message to the antenna's queue
+					bufferMap[myself] << msg;
+					//}
 
 				}
 
