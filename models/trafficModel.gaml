@@ -8,7 +8,7 @@
 model trafficModel
 
 global {
-	int NUM_TRAIN_AGENTS <- 10;
+	int NUM_TRAIN_AGENTS <- 2;
 
 	//the size of data windows
 	int ACW_SIZE <- 10;
@@ -142,16 +142,29 @@ species antenna {
 		 * the dictionary).
 		 */
 		map<people, list<AmAliveMessage>> bf <- bufferMap;
+		//remove a set of keys, where the condition is that the corresponding values are ACW of size ACW_SIZE
 		bf >>- bf where (length(each) = ACW_SIZE);
 
 		// loop over the agents that sent exactly ACW_SIZE information to this antenna
 		loop ag over: bf.keys {
 			if (ag.isTrainAgent = true) {
+			// ----------------------------------------
+			// MESSAGE FROM A TRAINING VEHICLE
+			// MESSAGES ARE DIRECTLY ADDED TO ANTENNA'S
+			// KNOWLEDGE BASE
+			// ----------------------------------------
 				beliefs <+ bf[ag];
 
 				//remove the record which key if ag
 				bf[] >- ag;
+				// ----------------------------------------
 			} else {
+			// --------------------------------------------
+			// MESSAGE FROM A VEHICLE.
+			// THE MESSAGE IS TESTED TOWARDS THE KNOWLEDGE
+			// OF THE ANTENNA TO DETERMINE IF THE VEHICLE
+			// IS IN ITS REGION
+			// --------------------------------------------
 			//get the messages received by ag
 				list<AmAliveMessage> agMsgList <- bf[ag];
 				float agMean <- #max_float;
@@ -161,12 +174,12 @@ species antenna {
 					loop index from: 0 to: length(agMsgList) - 1 {
 					// series is a list of AmAliveMessages of size ACW_SIZE
 					// loop over the elements of [series]
-					//write string('series: ', length(series), '; agMsgList: ', length(agMsgList));
-						int xdiff <- abs(series[index].x - agMsgList[index].x);
-						int ydiff <- abs(series[index].y - agMsgList[index].y);
-						float distanceDiff <- abs(series[index].distance - agMsgList[index].distance);
-						float speedDiff <- abs(series[index].speed - agMsgList[index].speed);
-						seriesMean <- seriesMean + xdiff + ydiff + distanceDiff + speedDiff;
+						list<float> diffs <- [];
+						diffs <+ abs(series[index].speed - agMsgList[index].speed);
+						diffs <+ abs(series[index].propagationDelay - agMsgList[index].propagationDelay);
+						diffs <+ abs(series[index].directionX - agMsgList[index].directionX);
+						diffs <+ abs(series[index].directionY - agMsgList[index].directionY);
+						seriesMean <- sum(diffs) + seriesMean;
 					}
 
 					seriesMean <- seriesMean / length(agMsgList);
@@ -200,10 +213,7 @@ species antenna {
 				} else {
 					ag.theRegion <- self;
 				}
-
-				//get the most similar sequence
-
-				//send the score to ag
+				// --------------------------------------------
 			}
 
 		}
@@ -256,17 +266,55 @@ species AmAliveMessage {
 	float distance;
 
 	/**
+	 * The frequency at which the owner vehicle send messages
+	 */
+	float vehicleMessagesFrequency;
+
+	/**
+	 * The propagation delay is the time it takes for one bit to travel from one end of the link to the other. 
+	 * The bits travel in the form of electromagnetic signals. The speed at which electromagnetic signals 
+	 * propagate is determined by the medium through which they pass. Following is the formula for propagation delay:
+     * <br/>
+	 * D/S
+ 	 * <br/>
+	 * where D is the distance between sender and receiver over a link, and S is the transmission speed.
+	 */
+	float propagationDelay;
+
+	/** Transmission delay is the time needed to push all the packet bits on the transmission 
+	 * link. It mainly depends upon the size of the data and channel bandwidth (in bps). 
+	 * Following is the formula for transmission delay:
+	 * <br/>
+	 * L/R
+ 	 * <br/>
+	 * where L is the length of the packet and R is the transmission rate. 
+	 */
+	float transmissionDelay;
+
+	/**
+	 * X Direction of this vehicle. Note that this value can be only calculated
+	 * when this message is part of a list of messages received by a specific vehicle
+	 */
+	float directionX;
+
+	/**
+	 * Y Direction of this vehicle. Note that this value can be only calculated
+	 * when this message is part of a list of messages received by a specific vehicle
+	 */
+	float directionY;
+
+	/**
 	 * x coordinate of the sender at the moment this message is sent
 	 */
-	int x;
+	float x;
 
 	/**
 	 * y coordinate of the sender at the moment this message is sent
 	 */
-	int y;
+	float y;
 
 	/**
-	 * speed of the sender at the moment this message is sent
+	 * speed of the sender at the moment this message has been sent
 	 */
 	float speed;
 }
@@ -321,6 +369,19 @@ species people skills: [moving] {
 					msg.sender <- myself;
 					msg.receiver <- self;
 					msg.distance <- self distance_to myself;
+					msg.vehicleMessagesFrequency <- myself.myUpdateRate;
+					msg.propagationDelay <- msg.distance / (2.4 * 10 ^ 8); //todo which value?
+					msg.x <- myself.location.x;
+					msg.y <- myself.location.y;
+					AmAliveMessage lastMsgOfThisAgent <- messages_queue last_with (each.sender = myself);
+					if (lastMsgOfThisAgent = nil) {
+						msg.directionX <- 0.0;
+						msg.directionY <- 0.0;
+					} else {
+						msg.directionX <- msg.x - lastMsgOfThisAgent.x;
+						msg.directionY <- msg.y - lastMsgOfThisAgent.y;
+					}
+
 					//write string("created message: ", msg.sender, "{", (msg.sender as people).myUpdateRate, "} to ", msg.receiver, " dist: " + msg.distance);
 					add msg to: messages_queue;
 					// Each vehicle sends an I Am Alive message to the nearest antenna
@@ -331,8 +392,6 @@ species people skills: [moving] {
 					}
 					// add the message to the antenna's queue
 					bufferMap[myself] << msg;
-					//}
-
 				}
 
 			}
@@ -357,7 +416,7 @@ species people skills: [moving] {
 		}
 
 		if (theRegion != nil) {
-			draw line([{location.x, location.y}, {theRegion.location.x, theRegion.location.y}]) width: 4 color: #black;
+			draw line([{location.x, location.y}, {theRegion.location.x, theRegion.location.y}]) width: 8 color: #black;
 		}
 
 	} }
