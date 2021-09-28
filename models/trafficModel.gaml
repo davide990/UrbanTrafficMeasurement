@@ -8,11 +8,11 @@
 model trafficModel
 
 global {
-//number of erroneous assignment of region to vehicles
-
-	// todo effettivamente imparo? Devo misurare l'errore per unità di tempo 
-	// e verificare se questo diminuisce.
+	list<float> serie_x <- [1.0];
+	list<float> errorsPerTimeUnits <- [0.0];
+	//number of erroneous assignment of region to vehicles
 	int erroneousRegionAssignments <- 0;
+	int errorMeasurementFrequency <- 5 #cycle;
 	int NUM_TRAIN_AGENTS <- 2;
 
 	//the size of data windows
@@ -62,7 +62,7 @@ global {
 
 		//TODO POSSO CREARE DEGLI AGENTI DI TRAIN, con un boolean
 		// i loro valori saranno memorizzati dalle antenne senza alcun 
-
+		create errorMeasurer;
 
 		//Creation of the people agents
 		create people number: NUM_VEHICLES {
@@ -339,12 +339,6 @@ species people skills: [moving] {
 	float speed; // <- rnd(10,50) #km/#h;    //5 #km / #h;
 	rgb color <- rnd_color(255);
 
-	init {
-		if (isTrainAgent) {
-		}
-
-	}
-
 	//Reflex to leave the building to another building
 	reflex leave when: (target = nil) and (flip(leaving_proba)) {
 		target <- any_location_in(one_of(building));
@@ -363,43 +357,40 @@ species people skills: [moving] {
 
 	reflex sendIAmAliveMessage when: every(myUpdateRate) { //every(VEHICLES_SEND_MSG_FREQ) {
 	//QUESTION: is this ok? Or the vehicle should send its information only to one aggregator agent?
-		antenna closestAntenna <- antenna closest_to (self);
-		if (closestAntenna != nil) {
-			if (closestAntenna distance_to (self) <= MIN_DISTANCE_ALLOWED) {
-				ask closestAntenna {
-				//Create a new message containing information on who sends the message,
-				// who receives the message (antenna) and the distance between the vehicle
-				// and the antenna
-					create AmAliveMessage returns: created_msg;
-					AmAliveMessage msg <- first(created_msg);
-					msg.sender <- myself;
-					msg.receiver <- self;
-					msg.distance <- self distance_to myself;
-					msg.vehicleMessagesFrequency <- myself.myUpdateRate;
-					msg.propagationDelay <- msg.distance / (2.4 * 10 ^ 8); //todo which value?
-					msg.x <- myself.location.x;
-					msg.y <- myself.location.y;
-					AmAliveMessage lastMsgOfThisAgent <- messages_queue last_with (each.sender = myself);
-					if (lastMsgOfThisAgent = nil) {
-						msg.directionX <- 0.0;
-						msg.directionY <- 0.0;
-					} else {
-						msg.directionX <- msg.x - lastMsgOfThisAgent.x;
-						msg.directionY <- msg.y - lastMsgOfThisAgent.y;
-					}
-
-					//write string("created message: ", msg.sender, "{", (msg.sender as people).myUpdateRate, "} to ", msg.receiver, " dist: " + msg.distance);
-					add msg to: messages_queue;
-					// Each vehicle sends an I Am Alive message to the nearest antenna
-					receivedIAmAliveMessages <- receivedIAmAliveMessages + 1;
-					//trace {
-					if (bufferMap[myself] = nil) {
-						bufferMap[myself] <- [];
-					}
-					// add the message to the antenna's queue
-					bufferMap[myself] << msg;
+		list<antenna> closeAntenna <- antenna where (each distance_to (self) <= MIN_DISTANCE_ALLOWED);
+		loop closestAntenna over: closeAntenna {
+		//if (closestAntenna distance_to (self) <= MIN_DISTANCE_ALLOWED) {
+			ask closestAntenna {
+			//Create a new message containing information on who sends the message,
+			// who receives the message (antenna) and the distance between the vehicle
+			// and the antenna
+				create AmAliveMessage returns: created_msg;
+				AmAliveMessage msg <- first(created_msg);
+				msg.sender <- myself;
+				msg.receiver <- self;
+				msg.distance <- self distance_to myself;
+				msg.vehicleMessagesFrequency <- myself.myUpdateRate;
+				msg.propagationDelay <- msg.distance / (2.4 * 10 ^ 8); //todo which value?
+				msg.x <- myself.location.x;
+				msg.y <- myself.location.y;
+				AmAliveMessage lastMsgOfThisAgent <- messages_queue last_with (each.sender = myself);
+				if (lastMsgOfThisAgent = nil) {
+					msg.directionX <- 0.0;
+					msg.directionY <- 0.0;
+				} else {
+					msg.directionX <- msg.x - lastMsgOfThisAgent.x;
+					msg.directionY <- msg.y - lastMsgOfThisAgent.y;
 				}
 
+				add msg to: messages_queue;
+				// Each vehicle sends an I Am Alive message to the nearest antenna
+				receivedIAmAliveMessages <- receivedIAmAliveMessages + 1;
+				if (bufferMap[myself] = nil) {
+					bufferMap[myself] <- [];
+				}
+
+				// add the message to the antenna's queue
+				bufferMap[myself] << msg;
 			}
 
 		}
@@ -407,9 +398,7 @@ species people skills: [moving] {
 	}
 
 	reflex onRegionChange when: previousRegion != theRegion {
-		
 		previousRegion <- theRegion;
-		
 		antenna closestAntenna <- antenna closest_to (self);
 		if (theRegion != nil and closestAntenna != nil) {
 			if ((closestAntenna distance_to (self)) != theRegion) {
@@ -465,6 +454,17 @@ species road {
 
 }
 
+species errorMeasurer {
+
+	reflex sendIAmAliveMessage when: every(errorMeasurementFrequency) {
+		write string("errors: ", erroneousRegionAssignments);
+		add erroneousRegionAssignments to: errorsPerTimeUnits;
+		add last(serie_x) + 1 to: serie_x;
+		erroneousRegionAssignments <- 0;
+	}
+
+}
+
 grid cell neighbors: num_neighbours use_neighbors_cache: true use_individual_shapes: false use_regular_agents: false parallel: true {
 // Note: since GAMA 1.7, the topology needs to be specified for this computation to use continuous distances
 	rgb color <- #white update: ((antenna closest_to location) using w).regionColor;
@@ -488,16 +488,18 @@ experiment traffic type: gui {
 			species people;
 			species antenna;
 			grid cell;
-			
-			chart "datalist_bar" type: histogram series_label_position: onchart size: {1.0,0.5} position: {0,1}{
-				datalist legend: ["A", "B", "C"] style: bar value: [erroneousRegionAssignments] color: [#green];
-			}
+			//chart "datalist_bar" type: histogram series_label_position: onchart size: {1.0, 0.5} position: {0, 1} {
+			//	datalist legend: ["A", "B", "C"] style: bar value: [erroneousRegionAssignments] color: [#green];
+			//}
+
 		}
 
-		//display "datalist_bar_cchart" type: java2D {
-			
+		display "datalist_bar_cchart" type: java2D {
+			chart "errors" type: xy {//size: {1.0, 0.5} position: {0, 1} {
+				data legend: "errors" value: rows_list(matrix([serie_x, errorsPerTimeUnits])) line_visible: true color: #red;
+			}
 
-		//}
+		}
 
 	}
 
