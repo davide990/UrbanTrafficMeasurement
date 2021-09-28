@@ -8,6 +8,11 @@
 model trafficModel
 
 global {
+//number of erroneous assignment of region to vehicles
+
+	// todo effettivamente imparo? Devo misurare l'errore per unità di tempo 
+	// e verificare se questo diminuisce.
+	int erroneousRegionAssignments <- 0;
 	int NUM_TRAIN_AGENTS <- 2;
 
 	//the size of data windows
@@ -235,7 +240,7 @@ species antenna {
 		 * 
 		 */
 //Update the color of this antenna. The color goes from green (less traffic) to red (more traffic)
-		color <- rgb(255 * (length(messages_queue) / 30), 255 * (1 - (length(messages_queue) / 30)), 0.0);
+		color <- rgb(255 * (length(messages_queue) / 30), 255 * (1 - (length(messages_queue) / 30)), 0);
 
 		// clear the message queue, as the aggregation of its values has terminated
 		messages_queue <- [];
@@ -321,6 +326,7 @@ species AmAliveMessage {
 
 //Species to represent the people using the skill moving
 species people skills: [moving] {
+	antenna previousRegion <- nil;
 	antenna theRegion <- nil;
 	bool isTrainAgent <- false;
 	float myUpdateRate;
@@ -400,6 +406,20 @@ species people skills: [moving] {
 
 	}
 
+	reflex onRegionChange when: previousRegion != theRegion {
+		
+		previousRegion <- theRegion;
+		
+		antenna closestAntenna <- antenna closest_to (self);
+		if (theRegion != nil and closestAntenna != nil) {
+			if ((closestAntenna distance_to (self)) != theRegion) {
+				erroneousRegionAssignments <- erroneousRegionAssignments + 1;
+			}
+
+		}
+
+	}
+
 	//Reflex to move to the target building moving on the road network
 	reflex move when: target != nil {
 	//we use the return_path facet to return the path followed
@@ -468,7 +488,16 @@ experiment traffic type: gui {
 			species people;
 			species antenna;
 			grid cell;
+			
+			chart "datalist_bar" type: histogram series_label_position: onchart size: {1.0,0.5} position: {0,1}{
+				datalist legend: ["A", "B", "C"] style: bar value: [erroneousRegionAssignments] color: [#green];
+			}
 		}
+
+		//display "datalist_bar_cchart" type: java2D {
+			
+
+		//}
 
 	}
 
